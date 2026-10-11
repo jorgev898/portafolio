@@ -1,32 +1,24 @@
-# React + TypeScript + Vite
+# Portafolio · Jorge Vergel
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Portafolio en forma de cómic estilo Spider-Verse: un libro 3D que se abre y donde cada sección es una página, con Spiderman agarrado al borde izquierdo de la pantalla.
 
-Currently, two official plugins are available:
+React + TypeScript + Vite · three.js con @react-three/fiber y @react-three/drei · GSAP.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev     # desarrollo
+npm run build   # comprobación de tipos + build de producción
+npm run lint    # oxlint
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Estructura
+
+- `src/content/sections.ts`: textos del cómic (título y secciones). Los textos de ejemplo están marcados como tales.
+- `src/lib/comicCanvas.ts`: dibuja la portada y las páginas en canvas (tramado, desfase de color, viñetas).
+- `src/three/Book.tsx`: el libro 3D; las hojas se curvan al pasar y se animan con GSAP.
+- `src/three/minifigRig.ts`: separa el GLB en sus 6 piezas rígidas y calcula pivotes propios (el esqueleto original está a otra escala que la malla).
+- `src/three/Spiderman.tsx`: pose de pared, reposo, cabeza que sigue al cursor y escalada al pasar de página, animado a 12 poses/s.
+
+## Créditos
+
+Modelo 3D: [“Lego Spiderman minifigure version 2”](https://sketchfab.com/3d-models/lego-spiderman-minifigure-version-2-2010edbfc0a34201b659655539b33953) de Neut2000, licencia [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/).

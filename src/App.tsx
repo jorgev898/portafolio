@@ -1,122 +1,156 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
+import { Canvas } from '@react-three/fiber'
+import { COMIC, SECTIONS } from './content/sections'
+import { useFontsReady, useReducedMotion, useSinglePage } from './lib/hooks'
+import { CLOSED, PAGE_COUNT } from './three/bookLayout'
+import { Scene } from './three/Scene'
 
-function App() {
-  const [count, setCount] = useState(0)
+const SWIPE_PX = 40
 
+/** Etiqueta legible de lo que se ve en cada página. */
+const PAGE_LABELS = ['Índice', ...SECTIONS.map((s) => s.title), '¿Continuará…?']
+
+function Chevron({ dir }: { dir: 'left' | 'right' }) {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" className="icon">
+      <path
+        d={dir === 'left' ? 'M15 4 7 12l8 8' : 'M9 4l8 8-8 8'}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   )
 }
 
-export default App
+export default function App() {
+  const [page, setPage] = useState(CLOSED)
+  const singlePage = useSinglePage()
+  const reducedMotion = useReducedMotion()
+  const fontsReady = useFontsReady()
+
+  const step = useCallback(
+    (dir: 1 | -1) =>
+      setPage((p) => {
+        if (singlePage) return Math.min(PAGE_COUNT - 1, Math.max(CLOSED, p + dir))
+        // Doble página: saltamos a la página izquierda del pliego siguiente/anterior.
+        if (p === CLOSED) return dir > 0 ? 0 : CLOSED
+        const spread = Math.floor(p / 2)
+        const next = dir > 0 ? (spread + 1) * 2 : (spread - 1) * 2
+        if (next >= PAGE_COUNT) return p
+        return next < 0 ? CLOSED : next
+      }),
+    [singlePage],
+  )
+  const close = useCallback(() => setPage(CLOSED), [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight') step(1)
+      else if (e.key === 'ArrowLeft') step(-1)
+      else if (e.key === 'Escape') close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [step, close])
+
+  // Clic: abre el libro o pasa de página según el lado. Swipe: dirección del gesto.
+  const down = useRef<{ x: number; y: number } | null>(null)
+  const onPointerDown = (e: PointerEvent) => {
+    down.current = { x: e.clientX, y: e.clientY }
+  }
+  const onPointerUp = (e: PointerEvent) => {
+    const start = down.current
+    down.current = null
+    if (!start) return
+    const dx = e.clientX - start.x
+    const dy = e.clientY - start.y
+    if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1)
+    else if (Math.hypot(dx, dy) < 10) {
+      if (page === CLOSED) step(1)
+      else step(e.clientX > window.innerWidth / 2 ? 1 : -1)
+    }
+  }
+
+  const isOpen = page !== CLOSED
+  const lastPage = singlePage ? PAGE_COUNT - 1 : PAGE_COUNT - 2
+  const atEnd = page >= lastPage
+  const label = singlePage || !isOpen ? PAGE_LABELS[page] : `${PAGE_LABELS[page]} · ${PAGE_LABELS[page + 1]}`
+
+  return (
+    <>
+      <div
+        className="stage"
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => (down.current = null)}
+        aria-hidden="true"
+      >
+        <Canvas
+          dpr={[1, 2]}
+          camera={{ position: [0, 0, 6], fov: 35 }}
+          gl={{ antialias: true, alpha: true }}
+          flat
+        >
+          <Scene page={page} singlePage={singlePage} fontsReady={fontsReady} reducedMotion={reducedMotion} />
+        </Canvas>
+      </div>
+
+      <div className="hud">
+        {isOpen ? (
+          <nav className="pager" aria-label="Páginas del cómic">
+            <button type="button" className="btn" onClick={() => step(-1)} aria-label="Página anterior">
+              <Chevron dir="left" />
+            </button>
+            <p className="pager-label" aria-live="polite">
+              {label}
+            </p>
+            <button type="button" className="btn" onClick={() => step(1)} disabled={atEnd} aria-label="Página siguiente">
+              <Chevron dir="right" />
+            </button>
+            <button type="button" className="btn btn-text" onClick={close}>
+              Cerrar
+            </button>
+          </nav>
+        ) : (
+          <button type="button" className="hint" onClick={() => step(1)}>
+            Haz clic en la portada para abrir
+          </button>
+        )}
+      </div>
+
+      <p className="credit">
+        Modelo 3D:{' '}
+        <a
+          href="https://sketchfab.com/3d-models/lego-spiderman-minifigure-version-2-2010edbfc0a34201b659655539b33953"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Neut2000
+        </a>{' '}
+        · CC BY 4.0
+      </p>
+
+      {/* Versión en texto del cómic para lectores de pantalla y buscadores. */}
+      <main className="sr-only">
+        <h1>
+          {COMIC.title}: {COMIC.issue}
+        </h1>
+        <p>{COMIC.tagline}</p>
+        {SECTIONS.map((s) => (
+          <section key={s.id} id={s.id}>
+            <h2>{s.title}</h2>
+            <p>{s.lead}</p>
+            <ul>
+              {s.notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </main>
+    </>
+  )
+}
