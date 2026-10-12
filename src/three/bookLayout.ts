@@ -1,4 +1,4 @@
-import { SECTIONS } from '../content/sections'
+import { CHAPTERS } from '../content/sections'
 
 export const PAGE_W = 1
 export const PAGE_H = 1.5
@@ -6,7 +6,7 @@ export const COVER_W = 1.04
 export const COVER_H = 1.58
 
 /** Páginas lineales del libro: 0 = índice (interior de la portada), 1..4 = secciones, 5 = cierre. */
-export const PAGE_COUNT = SECTIONS.length + 2
+export const PAGE_COUNT = CHAPTERS.length + 2
 
 /** Página enfocada cuando el libro está cerrado. */
 export const CLOSED = -1

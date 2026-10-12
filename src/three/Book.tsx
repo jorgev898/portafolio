@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import gsap from 'gsap'
 import * as THREE from 'three'
-import { SECTIONS } from '../content/sections'
-import { drawBlank, drawBoard, drawCover, drawEnd, drawIndex, drawSection } from '../lib/comicCanvas'
+import { CHAPTERS } from '../content/sections'
+import { drawBlank, drawBoard, drawCover, drawEnd, drawIndex, drawChapter } from '../lib/comicCanvas'
 import { COVER_H, COVER_W, PAGE_H, PAGE_W, turnedFor } from './bookLayout'
 
 const GAP = 0.006
@@ -88,7 +88,7 @@ export function Book({ page, offsetX, reducedMotion }: BookProps) {
   const shadowRef = useRef<THREE.Mesh>(null)
 
   const textures = useMemo(() => {
-    const sections = SECTIONS.map((s, i) => drawSection(s, i, i % 2 === 0 ? 'right' : 'left'))
+    const sections = CHAPTERS.map((s, i) => drawChapter(s, i, i % 2 === 0 ? 'right' : 'left'))
     return {
       cover: drawCover(),
       index: drawIndex(),

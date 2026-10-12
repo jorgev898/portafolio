@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { COMIC, SECTIONS } from './content/sections'
+import { CHAPTERS, COMIC, CONTACT } from './content/sections'
 import { useFontsReady, useReducedMotion, useSinglePage } from './lib/hooks'
 import { CLOSED, PAGE_COUNT } from './three/bookLayout'
 import { Scene } from './three/Scene'
@@ -8,7 +8,7 @@ import { Scene } from './three/Scene'
 const SWIPE_PX = 40
 
 /** Etiqueta legible de lo que se ve en cada página. */
-const PAGE_LABELS = ['Índice', ...SECTIONS.map((s) => s.title), '¿Continuará…?']
+const PAGE_LABELS = ['Índice', ...CHAPTERS.map((s) => s.title), '¿Continuará…?']
 
 function Chevron({ dir }: { dir: 'left' | 'right' }) {
   return (
@@ -139,17 +139,26 @@ export default function App() {
           {COMIC.title}: {COMIC.issue}
         </h1>
         <p>{COMIC.tagline}</p>
-        {SECTIONS.map((s) => (
+        {CHAPTERS.map((s) => (
           <section key={s.id} id={s.id}>
-            <h2>{s.title}</h2>
-            <p>{s.lead}</p>
-            <ul>
-              {s.notes.map((n) => (
-                <li key={n}>{n}</li>
-              ))}
-            </ul>
+            <h2>
+              {s.title} ({s.year})
+            </h2>
+            <p>{s.narration}</p>
+            <blockquote>{s.bubble}</blockquote>
           </section>
         ))}
+        <section id="contacto">
+          <h2>Contacto</h2>
+          <p>{CONTACT.invite}</p>
+          <ul>
+            {CONTACT.links.map((l) => (
+              <li key={l.label}>
+                {l.label}: {l.href}
+              </li>
+            ))}
+          </ul>
+        </section>
       </main>
     </>
   )

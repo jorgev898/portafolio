@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { COMIC, SECTIONS, type Section } from '../content/sections'
+import { CHAPTERS, COMIC, CONTACT, type Chapter, type Panel } from '../content/sections'
 
 export const INK = '#17130e'
 export const PAPER = '#f2e8d5'
@@ -227,6 +227,114 @@ function pageNumber(ctx: Ctx, n: number, w: number, h: number, side: 'left' | 'r
   ctx.restore()
 }
 
+/** Reduce el tamaño hasta que el texto quepa en una línea de `maxW`. Devuelve el tamaño usado. */
+function fitSize(ctx: Ctx, text: string, font: (size: number) => string, maxW: number, maxSize: number) {
+  let size = maxSize
+  ctx.font = font(size)
+  while (size > 12 && ctx.measureText(text).width > maxW) ctx.font = font((size -= 4))
+  return size
+}
+
+/** Texto centrado en varias líneas alrededor de (cx, cy). */
+function centered(ctx: Ctx, text: string, cx: number, cy: number, maxW: number, size: number, color: string, font = TEXT) {
+  ctx.save()
+  ctx.font = `700 ${size}px ${font}`
+  ctx.fillStyle = color
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const lines = wrap(ctx, text, maxW)
+  const lh = size * 1.2
+  lines.forEach((l, i) => ctx.fillText(l, cx, cy + (i - (lines.length - 1) / 2) * lh))
+  ctx.restore()
+}
+
+/** Bocadillo de diálogo con la cola apuntando a (tx, ty). */
+function speech(ctx: Ctx, text: string, cx: number, cy: number, w: number, tx: number, ty: number, size = 30) {
+  ctx.save()
+  ctx.font = `700 ${size}px ${TEXT}`
+  const lines = wrap(ctx, text, w * 0.7)
+  const rx = w / 2
+  const ry = (lines.length * size * 1.2) / 2 + size * 1.1
+  const shape = () => {
+    const a = Math.atan2(ty - cy, tx - cx)
+    ctx.beginPath()
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+    ctx.moveTo(cx + Math.cos(a - 0.3) * rx * 0.8, cy + Math.sin(a - 0.3) * ry * 0.8)
+    ctx.lineTo(tx, ty)
+    ctx.lineTo(cx + Math.cos(a + 0.3) * rx * 0.8, cy + Math.sin(a + 0.3) * ry * 0.8)
+    ctx.closePath()
+  }
+  ctx.translate(6, 6)
+  shape()
+  ctx.fillStyle = INK
+  ctx.fill()
+  ctx.translate(-6, -6)
+  // Contorno grueso primero y relleno encima: globo y cola quedan como una sola forma.
+  shape()
+  ctx.lineWidth = 10
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = INK
+  ctx.stroke()
+  ctx.fillStyle = '#fffaf0'
+  ctx.fill()
+  ctx.restore()
+  centered(ctx, text, cx, cy, w * 0.7, size, INK)
+}
+
+type Rect = { x: number; y: number; w: number; h: number }
+
+/** Pinta una viñeta según su tipo. Las que esperan material se ven como huecos marcados. */
+function drawPanel(ctx: Ctx, p: Panel, r: Rect, accent: string) {
+  const s = Math.min(r.w, r.h)
+  const cx = r.x + r.w / 2
+  const cy = r.y + r.h / 2
+  const label = Math.max(22, s * 0.065)
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(r.x, r.y, r.w, r.h)
+  ctx.clip()
+  if (p.kind === 'photo') {
+    ctx.fillStyle = '#e4d8c0'
+    ctx.fillRect(r.x, r.y, r.w, r.h)
+    halftone(ctx, r.x, r.y, r.w, r.h, accent, (u, v) => 0.55 - Math.hypot(u - 0.5, v - 0.5) * 0.8, 12)
+    ctx.setLineDash([18, 12])
+    ctx.lineWidth = 4
+    ctx.strokeStyle = 'rgba(23,19,14,0.55)'
+    ctx.strokeRect(r.x + 20, r.y + 20, r.w - 40, r.h - 40)
+    ctx.setLineDash([])
+    offsetText(ctx, 'FOTO', cx, cy, s * 0.2, INK, { align: 'center' })
+    centered(ctx, p.content, cx, cy + s * 0.16, r.w - 80, label, INK)
+  } else if (p.kind === 'scene') {
+    ctx.fillStyle = accent
+    ctx.fillRect(r.x, r.y, r.w, r.h)
+    halftone(ctx, r.x, r.y, r.w, r.h, 'rgba(23,19,14,0.35)', (u, v) => Math.hypot(u - 0.5, v - 0.55) * 1.3, 14)
+    web(ctx, r.x + r.w, r.y, s * 1.1, 'rgba(242,232,213,0.3)', Math.PI * 0.5, Math.PI)
+    offsetText(ctx, 'ESCENA 3D', cx, cy, s * 0.15, PAPER, { align: 'center', stroke: INK })
+    centered(ctx, p.content, cx, cy + s * 0.16, r.w - 80, label, PAPER)
+  } else if (p.kind === 'type') {
+    ctx.fillStyle = PAPER
+    ctx.fillRect(r.x, r.y, r.w, r.h)
+    halftone(ctx, r.x, r.y, r.w, r.h, accent, (_, v) => 0.15 + (1 - v) * 0.45, 12)
+    // Un año o una palabra: gigante en una línea. Una frase: en varias líneas.
+    const size = fitSize(ctx, p.content, (n) => `${n}px ${DISPLAY}`, r.w - 50, s * 0.42)
+    if (size >= s * 0.2) offsetText(ctx, p.content, cx, cy + size * 0.35, size, YELLOW, { align: 'center', stroke: INK })
+    else centered(ctx, p.content, cx, cy, r.w - 50, s * 0.11, INK, DISPLAY)
+  } else {
+    const size = Math.max(20, s * 0.075)
+    ctx.fillStyle = '#1d1a24'
+    ctx.fillRect(r.x, r.y, r.w, r.h)
+    ctx.font = `700 ${size}px "Courier New", monospace`
+    ctx.textBaseline = 'top'
+    ctx.textAlign = 'left'
+    ctx.fillStyle = '#7ee0a1'
+    ctx.fillText('$ git log -1', r.x + 24, r.y + 28)
+    ctx.fillStyle = PAPER
+    wrap(ctx, p.content, r.w - 48).forEach((l, i) => ctx.fillText(l, r.x + 24, r.y + 28 + size * 1.7 + i * size * 1.25))
+  }
+  ctx.restore()
+  panel(ctx, r.x, r.y, r.w, r.h)
+}
+
 function toTexture(c: HTMLCanvasElement, mirrored = false) {
   const tex = new THREE.CanvasTexture(c)
   tex.colorSpace = THREE.SRGBColorSpace
@@ -303,7 +411,7 @@ export function drawIndex() {
   halftone(ctx, 0, 0, w, h, 'rgba(31,79,191,0.22)', (u, v) => 1 - (u + v) * 0.9, 16)
   offsetText(ctx, 'ÍNDICE', 60, 170, 130, INK)
   ctx.font = `700 40px ${TEXT}`
-  SECTIONS.forEach((s, i) => {
+  CHAPTERS.forEach((s, i) => {
     const y = 290 + i * 110
     ctx.fillStyle = i % 2 ? BLUE : RED
     ctx.fillRect(60, y - 50, 70, 70)
@@ -320,7 +428,7 @@ export function drawIndex() {
     ctx.fillText(s.title.toUpperCase(), 160, y + 8)
     ctx.font = `700 30px ${TEXT}`
     ctx.textAlign = 'right'
-    ctx.fillText(`pág. ${i + 1}`, w - 60, y + 4)
+    ctx.fillText(s.year, w - 60, y + 4)
     ctx.textAlign = 'left'
     ctx.setLineDash([4, 10])
     ctx.lineWidth = 3
@@ -349,37 +457,29 @@ export function drawIndex() {
   return toTexture(c, true)
 }
 
-export function drawSection(section: Section, index: number, side: 'left' | 'right') {
+export function drawChapter(chapter: Chapter, index: number, side: 'left' | 'right') {
   const { w, h } = PAGE_PX
   const { c, ctx } = canvas(w, h)
   paper(ctx, w, h, 20 + index)
   const accent = index % 2 ? BLUE : RED
   const m = 44
 
-  caption(ctx, section.chapter.toUpperCase(), m, m, 260, 28)
-  offsetText(ctx, section.title.toUpperCase(), m, 220, 120, INK)
+  caption(ctx, `CAP. ${index + 1} · ${chapter.year}`, m, m, 330, 28)
+  offsetText(ctx, chapter.title.toUpperCase(), m, 210, 110, INK)
 
-  // Viñeta principal
-  const p1 = { x: m, y: 260, w: w - m * 2, h: 470 }
-  ctx.fillStyle = accent
-  ctx.fillRect(p1.x, p1.y, p1.w, p1.h)
-  halftone(ctx, p1.x, p1.y, p1.w, p1.h, 'rgba(23,19,14,0.35)', (u, v) => Math.hypot(u - 0.85, v - 0.15) * 1.1, 15)
-  web(ctx, p1.x + p1.w, p1.y, p1.w * 0.9, 'rgba(242,232,213,0.35)', Math.PI * 0.5, Math.PI)
-  panel(ctx, p1.x, p1.y, p1.w, p1.h)
-  caption(ctx, section.lead, p1.x + 30, p1.y + 40, p1.w * 0.72, 40, PAPER, -0.02)
+  // Viñeta grande con la narración arriba y el bocadillo abajo
+  const main = { x: m, y: 240, w: w - m * 2, h: 520 }
+  drawPanel(ctx, chapter.main, main, accent)
+  caption(ctx, chapter.narration, main.x - 14, main.y - 14, main.w * 0.66, 28, YELLOW, -0.015)
+  speech(ctx, chapter.bubble, main.x + main.w * 0.68, main.y + main.h - 70, 360, main.x + main.w * 0.4, main.y + main.h - 24, 26)
 
-  // Dos viñetas secundarias
+  // Dos viñetas pequeñas
   const gap = 24
   const pw = (w - m * 2 - gap) / 2
-  const py = p1.y + p1.h + gap
+  const py = main.y + main.h + gap
   const ph = h - py - 90
-  section.notes.slice(0, 2).forEach((note, i) => {
-    const x = m + i * (pw + gap)
-    halftone(ctx, x, py, pw, ph, i ? 'rgba(215,38,46,0.3)' : 'rgba(31,79,191,0.3)', (u, v) => 1 - v * 0.9 - u * 0.1, 13)
-    panel(ctx, x, py, pw, ph)
-    caption(ctx, note, x + 18, py + 22, pw - 36, 28, i ? YELLOW : PAPER)
-  })
-  burst(ctx, w - 170, py + ph - 70, 90, section.sfx, YELLOW, 5 + index)
+  chapter.small.forEach((p, i) => drawPanel(ctx, p, { x: m + i * (pw + gap), y: py, w: pw, h: ph }, i ? RED : BLUE))
+  burst(ctx, 150, h - 70, 70, chapter.sfx, YELLOW, 5 + index)
 
   pageNumber(ctx, index + 1, w, h, side)
   return toTexture(c, side === 'left')
@@ -392,11 +492,32 @@ export function drawEnd() {
   halftone(ctx, 0, 0, w, h, 'rgba(215,38,46,0.28)', (u, v) => Math.hypot(u - 0.5, v - 0.45) * 1.4, 16)
   web(ctx, 0, 0, w * 1.1, 'rgba(23,19,14,0.18)', 0, Math.PI / 2)
   ctx.save()
-  ctx.translate(w / 2, h * 0.47)
+  ctx.translate(w / 2, h * 0.3)
   ctx.rotate(-0.06)
   offsetText(ctx, '¿CONTINUARÁ…?', 0, 0, 120, RED, { stroke: INK, align: 'center', offset: 6 })
   ctx.restore()
-  caption(ctx, 'Este cómic sigue en construcción. Vuelve pronto.', 90, h * 0.56, w - 180, 32, YELLOW, 0.02)
+  // El siguiente capítulo lo escribe quien lee: el contacto.
+  const top = h * 0.36
+  const inviteH = caption(ctx, CONTACT.invite, 80, top, w - 160, 32, YELLOW, 0.02)
+  CONTACT.links.forEach((l, i) => {
+    const y = top + inviteH + 70 + i * 110
+    ctx.fillStyle = INK
+    ctx.fillRect(86, y + 6, w - 160, 80)
+    ctx.fillStyle = PAPER
+    ctx.fillRect(80, y, w - 160, 80)
+    ctx.lineWidth = 5
+    ctx.strokeStyle = INK
+    ctx.strokeRect(80, y, w - 160, 80)
+    ctx.textBaseline = 'middle'
+    ctx.textAlign = 'left'
+    ctx.font = `44px ${DISPLAY}`
+    ctx.fillStyle = i % 2 ? BLUE : RED
+    ctx.fillText(l.label.toUpperCase(), 108, y + 44)
+    ctx.font = `700 28px ${TEXT}`
+    ctx.fillStyle = INK
+    ctx.textAlign = 'right'
+    ctx.fillText(l.href, w - 108, y + 42)
+  })
   return toTexture(c)
 }
 
