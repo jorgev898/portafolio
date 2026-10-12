@@ -26,8 +26,21 @@ const LIGHT_X = -0.45
 const LIGHT_Z = 0.89
 /** Desplazamiento de la sombra del libro sobre la mesa: la luz viene de arriba a la izquierda. */
 const LIGHT_OFFSET = new THREE.Vector2(0.04, -0.07)
+/**
+ * Caída de una hoja soltada (unidades de giro/s²). La gravedad tira según lo tumbada que esté,
+ * el aire la frena (cuadrático + lineal) y el colchón de aire que queda entre ella y la pila
+ * la frena aún más al llegar: planea y se posa en vez de golpear.
+ */
+const FALL_G = 5
+const AIR_DRAG = 6
+const AIR_LINEAR = 1
+const AIR_CUSHION = 0.8
+/** Pase con clic o flechas: la mano levanta la hoja hasta pasar algo la vertical y la suelta. */
+const HAND_PAST = 0.1
+const HAND_TIME = 0.5
 
-type Progress = { p: number }
+/** Giro de la hoja; `falling` es el reposo hacia el que cae suelta (null si la mueve gsap o la mano). */
+type Progress = { p: number; v: number; falling: number | null }
 type LeafSpec = (typeof LEAVES)[number]
 type Uniform<T> = { value: T }
 
@@ -351,7 +364,7 @@ export function Book({ page, offsetX, reducedMotion, drag }: BookProps) {
   }, [textures])
 
   const motion = useRef<Motion>({
-    progress: LEAVES.map(() => ({ p: 0 })),
+    progress: LEAVES.map(() => ({ p: 0, v: 0, falling: null })),
     bends: LEAVES.map(createBend),
     calm: reducedMotion,
   })
@@ -386,19 +399,38 @@ export function Book({ page, offsetX, reducedMotion, drag }: BookProps) {
     const forward = progress.some((pr, i) => i < turned && pr.p < 1)
     if (!forward) order.reverse()
     let delay = 0
-    const dur = reducedMotion ? 0 : 1.05
     for (const i of order) {
+      const lp = progress[i]
       const target = i < turned ? 1 : 0
-      if (progress[i].p === target) continue
-      // Una hoja soltada a medio camino solo recorre lo que le falta.
-      const span = Math.max(0.4, Math.abs(target - progress[i].p))
-      gsap.to(progress[i], {
-        p: target,
-        duration: dur * span,
-        delay,
-        ease: span < 1 ? 'power2.out' : 'power2.inOut',
-        overwrite: true,
-      })
+      // La hoja que se acaba de soltar ya cae sola hacia su sitio.
+      if (lp.falling === target || lp.p === target) continue
+      gsap.killTweensOf(lp)
+      const s = target > 0.5 ? 1 : -1
+      // La mano la levanta hasta pasar algo la vertical (acelerando, como un empujón) y la
+      // suelta: el resto lo hacen la gravedad y el aire, igual que al arrastrarla.
+      const release = 0.5 + s * HAND_PAST
+      const span = (release - lp.p) * s
+      if (reducedMotion) {
+        lp.falling = target
+      } else if (span <= 0.02) {
+        // Ya está pasada la vertical (p. ej. cayendo hacia el otro lado): basta un empujón.
+        lp.falling = target
+        lp.v = s * Math.max(s * lp.v, 1)
+      } else {
+        lp.falling = null
+        const duration = HAND_TIME * Math.max(0.4, span / (0.5 + HAND_PAST))
+        gsap.to(lp, {
+          p: release,
+          duration,
+          delay,
+          ease: 'sine.in',
+          onComplete: () => {
+            lp.falling = target
+            // Velocidad final de sine.in: π/2 · recorrido / duración.
+            lp.v = s * ((Math.PI / 2) * span) / duration
+          },
+        })
+      }
       delay += reducedMotion ? 0 : 0.14
     }
     if (shiftRef.current) {
@@ -421,16 +453,52 @@ export function Book({ page, offsetX, reducedMotion, drag }: BookProps) {
     })
     if (drag.active && drag.leaf >= 0) {
       const lp = progress[drag.leaf]
-      if (!wasActive.current) gsap.killTweensOf(lp)
+      if (!wasActive.current) {
+        gsap.killTweensOf(lp)
+        lp.falling = null
+      }
       lp.p = THREE.MathUtils.damp(lp.p, drag.p, reducedMotion ? 60 : FOLLOW, dt)
       const b = bends[drag.leaf]
       b.grabY = THREE.MathUtils.damp(b.grabY, drag.grabY, 20, dt)
-    } else if (wasActive.current && drag.cancel && drag.leaf >= 0) {
-      // Soltada sin pasar de la mitad: vuelve a su sitio.
-      const rest = drag.leaf < turnedFor(page) ? 1 : 0
-      gsap.to(progress[drag.leaf], { p: rest, duration: reducedMotion ? 0 : 0.5, ease: 'power3.out', overwrite: true })
+    } else if (wasActive.current && drag.leaf >= 0) {
+      // Soltada: cae sola con la velocidad que llevaba la mano, a un lado (pasa) o al otro (vuelve).
+      const lp = progress[drag.leaf]
+      const goes = !drag.cancel
+      gsap.killTweensOf(lp)
+      lp.falling = (drag.dir > 0) === goes ? 1 : 0
+      lp.v = THREE.MathUtils.clamp(bends[drag.leaf].vel, -3, 3)
     }
     wasActive.current = drag.active
+
+    for (const [i, lp] of progress.entries()) {
+      if (lp.falling === null) continue
+      const target = lp.falling
+      const s = target > lp.p ? 1 : -1
+      if (reducedMotion || (target - lp.p) * s <= 0) {
+        lp.p = target
+        lp.v = 0
+        lp.falling = null
+        continue
+      }
+      const leaf = LEAVES[i]
+      // La gravedad empuja según lo tumbada que esté; cerca de la vertical, un mínimo hacia su
+      // lado (el último empujón de la mano) para que no se quede de pie ni vuelva atrás.
+      const gravity = s * Math.max(-s * FALL_G * Math.cos(Math.PI * lp.p), 0.15 * FALL_G)
+      // El papel arrastra mucho aire; la portada, rígida y pesada, poco.
+      const air = 0.4 + 0.6 * leaf.soft
+      const gap = Math.abs(target - lp.p)
+      const h = Math.min(dt, 1 / 30)
+      // Los frenos lineales van implícitos: el colchón es muy rígido junto a la pila y, explícito,
+      // invertiría la velocidad en un fotograma largo.
+      const linear = air * (AIR_LINEAR + AIR_CUSHION / (gap + 0.02))
+      lp.v = (lp.v + (gravity - air * AIR_DRAG * lp.v * Math.abs(lp.v)) * h) / (1 + linear * h)
+      lp.p += lp.v * h
+      if ((target - lp.p) * s <= 0) {
+        lp.p = target
+        lp.v = 0
+        lp.falling = null
+      }
+    }
 
     // Con el cursor cerca del borde, la hoja que tocaría pasar se despega por la esquina más cercana.
     const fwd = turnedFor(page)
