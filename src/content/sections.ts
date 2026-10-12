@@ -1,7 +1,6 @@
 // Contenido del cómic: la historia de origen, un capítulo por página.
 //
 // PLANTILLA: todo lo que va entre [corchetes] es un hueco por rellenar.
-// La guía de qué poner en cada campo está en docs/mi-historia.md.
 
 /**
  * Qué muestra una viñeta:

@@ -13,7 +13,7 @@ npm run lint    # oxlint
 
 ## Estructura
 
-- `src/content/sections.ts`: la historia del cómic (portada, 4 capítulos y contacto). Los huecos van entre [corchetes]; la guía para rellenarlos está en `docs/mi-historia.md`.
+- `src/content/sections.ts`: la historia del cómic (portada, 4 capítulos y contacto). Los huecos por rellenar van entre [corchetes].
 - `src/lib/comicCanvas.ts`: dibuja la portada y las páginas en canvas (tramado, desfase de color, viñetas).
 - `src/three/Book.tsx`: el libro 3D; las hojas se curvan al pasar y se animan con GSAP.
 - `src/three/minifigRig.ts`: separa el GLB en sus 6 piezas rígidas y calcula pivotes propios (el esqueleto original está a otra escala que la malla).
