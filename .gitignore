@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Material de trabajo local, fuera del repositorio
+images/
+docs/
+.claude/
