@@ -1,7 +1,8 @@
-import { Suspense } from 'react'
-import { useThree } from '@react-three/fiber'
+import { Suspense, useRef, type ReactNode } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
+import * as THREE from 'three'
 import { Book } from './Book'
-import { COVER_H, COVER_W, PAGE_COUNT } from './bookLayout'
+import { COVER_H, COVER_W, PAGE_COUNT, hasHover, type DragState } from './bookLayout'
 import { Spiderman } from './Spiderman'
 
 type Props = {
@@ -9,6 +10,21 @@ type Props = {
   singlePage: boolean
   fontsReady: boolean
   reducedMotion: boolean
+  drag: DragState
+}
+
+/** Inclina el libro hacia el cursor con inercia, como un objeto colgado y no clavado. */
+function Tilt({ enabled, children }: { enabled: boolean; children: ReactNode }) {
+  const ref = useRef<THREE.Group>(null)
+  const hover = useRef(hasHover())
+  useFrame((state, dt) => {
+    const g = ref.current
+    if (!g) return
+    const on = enabled && hover.current
+    g.rotation.x = THREE.MathUtils.damp(g.rotation.x, on ? -state.pointer.y * 0.07 : 0, 4, dt)
+    g.rotation.y = THREE.MathUtils.damp(g.rotation.y, on ? state.pointer.x * 0.12 : 0, 4, dt)
+  })
+  return <group ref={ref}>{children}</group>
 }
 
 /** Reparte la pantalla entre el libro (centro) y Spiderman (pared izquierda). */
@@ -39,7 +55,7 @@ function useLayout(singlePage: boolean) {
   }
 }
 
-export function Scene({ page, singlePage, fontsReady, reducedMotion }: Props) {
+export function Scene({ page, singlePage, fontsReady, reducedMotion, drag }: Props) {
   const l = useLayout(singlePage)
 
   // Libro cerrado: centrado sobre la portada. Abierto: centrado en el lomo,
@@ -55,7 +71,9 @@ export function Scene({ page, singlePage, fontsReady, reducedMotion }: Props) {
       <ambientLight intensity={1.6} />
       <directionalLight position={[3, 4, 5]} intensity={2.4} />
       <group position-y={l.bookY} scale={l.bookScale}>
-        {fontsReady && <Book page={page} offsetX={offsetX} reducedMotion={reducedMotion} />}
+        <Tilt enabled={!reducedMotion}>
+          {fontsReady && <Book page={page} offsetX={offsetX} reducedMotion={reducedMotion} drag={drag} />}
+        </Tilt>
       </group>
       <Suspense fallback={null}>
         <Spiderman x={l.spideyX} y={spideyY} height={l.spideyH} open={page >= 0} reducedMotion={reducedMotion} />

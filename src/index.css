@@ -64,6 +64,10 @@ body::after {
   user-select: none;
 }
 
+.stage[data-drag] {
+  cursor: grabbing;
+}
+
 .hud {
   position: fixed;
   left: 50%;

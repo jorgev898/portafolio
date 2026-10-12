@@ -1,11 +1,30 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { CHAPTERS, COMIC, CONTACT } from './content/sections'
 import { useFontsReady, useReducedMotion, useSinglePage } from './lib/hooks'
-import { CLOSED, PAGE_COUNT } from './three/bookLayout'
+import { CLOSED, PAGE_COUNT, createDrag, grabLeaf, leafToDrag, moveLeaf, nextPage } from './three/bookLayout'
 import { Scene } from './three/Scene'
 
+type StageEvent = ReactPointerEvent<HTMLDivElement>
+
 const SWIPE_PX = 40
+/** Movimiento antes de considerar que es un arrastre y no un clic. */
+const DRAG_START_PX = 6
+/** Velocidad (px/ms) de un golpe que confirma el giro aunque no pase de la mitad. */
+const FLICK_SPEED = 0.45
+
+type Gesture = {
+  x: number
+  y: number
+  lastX: number
+  lastT: number
+  /** Velocidad horizontal suavizada, px/ms. */
+  vx: number
+  /** Dirección del arrastre (1 = adelante) cuando una hoja sigue a la mano. */
+  dir: 1 | -1 | 0
+  /** Ya se intentó agarrar una hoja en este gesto. */
+  tried: boolean
+}
 
 /** Etiqueta legible de lo que se ve en cada página. */
 const PAGE_LABELS = ['Índice', ...CHAPTERS.map((s) => s.title), '¿Continuará…?']
@@ -31,19 +50,7 @@ export default function App() {
   const reducedMotion = useReducedMotion()
   const fontsReady = useFontsReady()
 
-  const step = useCallback(
-    (dir: 1 | -1) =>
-      setPage((p) => {
-        if (singlePage) return Math.min(PAGE_COUNT - 1, Math.max(CLOSED, p + dir))
-        // Doble página: saltamos a la página izquierda del pliego siguiente/anterior.
-        if (p === CLOSED) return dir > 0 ? 0 : CLOSED
-        const spread = Math.floor(p / 2)
-        const next = dir > 0 ? (spread + 1) * 2 : (spread - 1) * 2
-        if (next >= PAGE_COUNT) return p
-        return next < 0 ? CLOSED : next
-      }),
-    [singlePage],
-  )
+  const step = useCallback((dir: 1 | -1) => setPage((p) => nextPage(p, dir, singlePage)), [singlePage])
   const close = useCallback(() => setPage(CLOSED), [])
 
   useEffect(() => {
@@ -56,22 +63,68 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [step, close])
 
-  // Clic: abre el libro o pasa de página según el lado. Swipe: dirección del gesto.
-  const down = useRef<{ x: number; y: number } | null>(null)
-  const onPointerDown = (e: PointerEvent) => {
-    down.current = { x: e.clientX, y: e.clientY }
+  // Arrastrar una hoja: el punto agarrado se queda bajo la mano; se confirma al pasar la mitad
+  // (o con un golpe rápido). Clic: abre el libro o pasa de página según el lado.
+  // Swipe: cuando el gesto no empezó sobre la hoja que tocaba girar.
+  const [drag] = useState(createDrag)
+  const down = useRef<Gesture | null>(null)
+
+  const endDrag = (stage: HTMLElement, cancel: boolean) => {
+    drag.active = false
+    drag.cancel = cancel
+    delete stage.dataset.drag
   }
-  const onPointerUp = (e: PointerEvent) => {
-    const start = down.current
+
+  const onPointerDown = (e: StageEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId)
+    down.current = { x: e.clientX, y: e.clientY, lastX: e.clientX, lastT: e.timeStamp, vx: 0, dir: 0, tried: false }
+  }
+  const onPointerMove = (e: StageEvent) => {
+    const g = down.current
+    if (!g) return
+    const dt = e.timeStamp - g.lastT
+    if (dt > 0) g.vx = g.vx * 0.6 + ((e.clientX - g.lastX) / dt) * 0.4
+    g.lastX = e.clientX
+    g.lastT = e.timeStamp
+    const dx = e.clientX - g.x
+    const dy = e.clientY - g.y
+
+    if (g.dir === 0) {
+      if (g.tried || Math.abs(dx) < DRAG_START_PX || Math.abs(dx) < Math.abs(dy)) return
+      // Se decide una sola vez por gesto: o agarra la hoja, o queda como swipe.
+      g.tried = true
+      const dir = dx < 0 ? 1 : -1
+      const leaf = leafToDrag(page, dir, singlePage)
+      if (leaf < 0 || !grabLeaf(drag, leaf, dir, g.x, g.y)) return
+      g.dir = dir
+      e.currentTarget.dataset.drag = ''
+    }
+    moveLeaf(drag, e.clientX, e.clientY)
+  }
+  const onPointerUp = (e: StageEvent) => {
+    const g = down.current
     down.current = null
-    if (!start) return
-    const dx = e.clientX - start.x
-    const dy = e.clientY - start.y
+    if (!g) return
+    if (g.dir !== 0) {
+      const pastHalf = g.dir > 0 ? drag.p > 0.5 : drag.p < 0.5
+      // Hacia delante la mano va a la izquierda (vx < 0); hacia atrás, a la derecha.
+      const flicked = -g.vx * g.dir > FLICK_SPEED
+      const goes = pastHalf || flicked
+      endDrag(e.currentTarget, !goes)
+      if (goes) step(g.dir)
+      return
+    }
+    const dx = e.clientX - g.x
+    const dy = e.clientY - g.y
     if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1)
     else if (Math.hypot(dx, dy) < 10) {
       if (page === CLOSED) step(1)
       else step(e.clientX > window.innerWidth / 2 ? 1 : -1)
     }
+  }
+  const onPointerCancel = (e: StageEvent) => {
+    if (down.current && down.current.dir !== 0) endDrag(e.currentTarget, true)
+    down.current = null
   }
 
   const isOpen = page !== CLOSED
@@ -84,8 +137,9 @@ export default function App() {
       <div
         className="stage"
         onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => (down.current = null)}
+        onPointerCancel={onPointerCancel}
         aria-hidden="true"
       >
         <Canvas
@@ -94,7 +148,13 @@ export default function App() {
           gl={{ antialias: true, alpha: true }}
           flat
         >
-          <Scene page={page} singlePage={singlePage} fontsReady={fontsReady} reducedMotion={reducedMotion} />
+          <Scene
+            page={page}
+            singlePage={singlePage}
+            fontsReady={fontsReady}
+            reducedMotion={reducedMotion}
+            drag={drag}
+          />
         </Canvas>
       </div>
 
