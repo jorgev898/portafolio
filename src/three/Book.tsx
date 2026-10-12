@@ -89,7 +89,44 @@ type PageShadow = {
   /** Distancia en la que la sombra se desvanece fuera de la hoja. */
   uReach: Uniform<number>
   uStrength: Uniform<number>
+  /** Reloj y altura de la ola que recorre el papel (0 con movimiento reducido). */
+  uTime: Uniform<number>
+  uWaveAmp: Uniform<number>
+  /** Arco del lomo: solo con el libro abierto. */
+  uGutter: Uniform<number>
 }
+
+/** Altura de la ola, en unidades de página. */
+const WAVE_AMP = 0.03
+/** Altura del arco con que cada página sale del lomo cuando el libro está abierto. */
+const GUTTER = 0.07
+
+/**
+ * Relieve del papel en coordenadas del libro (lomo en x = 0):
+ * - Arco del lomo: cada página sale del centro subiendo y baja hacia su borde, como en una
+ *   revista abierta; a cada lado del lomo el arco va hacia su lado.
+ * - Ola: dos frentes que recorren la página a distinto ritmo y en diagonal. Quieta en el lomo,
+ *   ya ondula a un tercio de la página, no solo en el canto.
+ * Solo levanta, nunca hunde. Y como depende solo de (x, y), cada capa sube lo mismo que la de
+ * debajo: la pila ondula junta sin cruzarse, incluida la hoja que se está pasando.
+ * La luz sale de la normal del relieve: las sombras viajan con la ola.
+ */
+const WAVE_GLSL = `
+uniform mat4 uWorldToBook;
+uniform float uTime;
+uniform float uWaveAmp;
+uniform float uGutter;
+uniform float uWaveScale;
+varying vec2 vBook;
+varying float vWaveShade;
+float paperRelief(vec2 b, float waveScale) {
+  float r = abs(b.x);
+  float arc = uGutter * (1.0 - exp(-r / 0.08)) * (1.0 - 0.8 * r);
+  float w = sin(6.2832 * (r / 0.62 - uTime / 5.1) + b.y * 1.6)
+          + 0.6 * sin(6.2832 * (r / 0.41 - uTime / 7.7) - b.y * 2.3 + 1.3);
+  float wave = uWaveAmp * smoothstep(0.0, 0.35, r) * (w + 1.6) / 3.2;
+  return arc + wave * waveScale;
+}`
 
 /**
  * Sombrea el papel en su propio shader. Al calcularse píxel a píxel sobre la página que recibe,
@@ -98,11 +135,33 @@ type PageShadow = {
  * páginas reciben a la vez y cada una oscurece según lo cerca que esté la hoja de su lado, así la
  * sombra pasa de una a otra sin saltos cuando la hoja cruza el lomo.
  */
-function withPageShadow(shared: PageShadow, receive: Uniform<number>) {
+function withPageShadow(shared: PageShadow, receive: Uniform<number>, waveScale: Uniform<number>) {
   return (shader: THREE.WebGLProgramParametersWithUniforms) => {
-    Object.assign(shader.uniforms, shared, { uReceive: receive })
+    Object.assign(shader.uniforms, shared, { uReceive: receive, uWaveScale: waveScale })
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform mat4 uWorldToBook;\nvarying vec2 vBook;')
+      .replace('#include <common>', `#include <common>${WAVE_GLSL}`)
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+{
+  // El marco local de cada pieza es el del libro desplazado: basta subir z.
+  vec2 b = (uWorldToBook * modelMatrix * vec4(transformed, 1.0)).xy;
+  float h = paperRelief(b, uWaveScale);
+  vec2 e = vec2(0.006, 0.0);
+  float dx = (paperRelief(b + e.xy, uWaveScale) - paperRelief(b - e.xy, uWaveScale)) / (2.0 * e.x);
+  float dy = (paperRelief(b + e.yx, uWaveScale) - paperRelief(b - e.yx, uWaveScale)) / (2.0 * e.x);
+  transformed.z += h;
+  // Luz de delante, arriba a la izquierda: la ladera que la mira brilla y la otra cae en
+  // penumbra, con algo más de contraste que la luz real para que se lea de frente.
+  vec3 n = normalize(vec3(-dx, -dy, 1.0));
+  vec3 L = normalize(vec3(-0.45, 0.3, 0.84));
+  float lit = 1.0 + 1.8 * (dot(n, L) / L.z - 1.0);
+  // Pliegue del lomo: el papel se junta y no le llega luz.
+  lit *= 1.0 - 0.35 * uGutter / ${GUTTER.toFixed(3)} * exp(-abs(b.x) / 0.025);
+  // La hoja levantada ya tiene su propia luz (colores de vértice): aquí solo la apoyada.
+  vWaveShade = mix(1.0, clamp(lit, 0.55, 1.25), uWaveScale);
+}`,
+      )
       .replace(
         '#include <project_vertex>',
         '#include <project_vertex>\nvBook = (uWorldToBook * modelMatrix * vec4(transformed, 1.0)).xy;',
@@ -115,7 +174,8 @@ uniform vec2 uEdge;
 uniform float uReach;
 uniform float uStrength;
 uniform float uReceive;
-varying vec2 vBook;`,
+varying vec2 vBook;
+varying float vWaveShade;`,
       )
       .replace(
         '#include <opaque_fragment>',
@@ -130,7 +190,7 @@ varying vec2 vBook;`,
   float near = smoothstep(-0.45, 0.15, edge);
   float s = abs(side) * uStrength * near * t * t;
   // Sombra cálida: el azul cae más que el rojo, como tinta sobre papel.
-  outgoingLight *= 1.0 - s * vec3(0.55, 0.6, 0.7);
+  outgoingLight *= (1.0 - s * vec3(0.55, 0.6, 0.7)) * vWaveShade;
 }
 #include <opaque_fragment>`,
       )
@@ -238,7 +298,9 @@ type LeafProps = {
 function Leaf({ index, spec, front, back, motion, shadow, receive }: LeafProps) {
   const group = useRef<THREE.Group>(null)
   const last = useRef({ p: -1, grabY: 0 })
-  const onBeforeCompile = useMemo(() => withPageShadow(shadow, receive), [shadow, receive])
+  // Apoyada ondula con la pila; al levantarla la sujeta su propio giro y la ola se apaga.
+  const wave = useMemo(() => ({ value: 1 }), [])
+  const onBeforeCompile = useMemo(() => withPageShadow(shadow, receive, wave), [shadow, receive, wave])
 
   // Una sola geometría para las dos caras: se dobla una vez por fotograma.
   const geo = useMemo(() => {
@@ -271,6 +333,7 @@ function Leaf({ index, spec, front, back, motion, shadow, receive }: LeafProps) 
         bend.flexVel = 0
       }
     }
+    wave.value = 1 - THREE.MathUtils.smoothstep(bend.lift, 0, 0.3)
     if (p === l.p && bend.vel === 0 && bend.flex === 0 && bend.grabY === l.grabY) return
     l.p = p
     l.grabY = bend.grabY
@@ -324,13 +387,19 @@ export function Book({ page, offsetX, reducedMotion, drag }: BookProps) {
       uEdge: { value: new THREE.Vector2(0, 0) },
       uReach: { value: 0.2 },
       uStrength: { value: 0 },
+      uTime: { value: 0 },
+      uWaveAmp: { value: 0 },
+      uGutter: { value: 0 },
     }),
     [],
   )
   // Un interruptor por hoja y otro para la contraportada: solo recibe sombra el papel de debajo.
   const receivers = useMemo(() => LEAVES.map(() => ({ value: 0 })), [])
   const boardReceive = useMemo(() => ({ value: 0 }), [])
-  const boardShadow = useMemo(() => withPageShadow(pageShadow, boardReceive), [pageShadow, boardReceive])
+  const boardShadow = useMemo(
+    () => withPageShadow(pageShadow, boardReceive, { value: 1 }),
+    [pageShadow, boardReceive],
+  )
 
   const textures = useMemo(() => {
     const sections = CHAPTERS.map((s, i) => drawChapter(s, i, i % 2 === 0 ? 'right' : 'left'))
@@ -549,6 +618,11 @@ export function Book({ page, offsetX, reducedMotion, drag }: BookProps) {
       pageShadow.uStrength.value = 0.5 * b.lift
     }
     if (shiftRef.current) pageShadow.uWorldToBook.value.copy(shiftRef.current.matrixWorld).invert()
+    pageShadow.uTime.value = state.clock.elapsedTime
+    // Con movimiento reducido la ola se apaga poco a poco en vez de congelarse a medias.
+    pageShadow.uWaveAmp.value = THREE.MathUtils.damp(pageShadow.uWaveAmp.value, reducedMotion ? 0 : WAVE_AMP, 3, dt)
+    // El arco aparece al abrirse la portada y se aplana al cerrarla.
+    pageShadow.uGutter.value = GUTTER * THREE.MathUtils.smoothstep(progress[0].p, 0.2, 0.9)
 
     // La huella del libro sobre la mesa va de la contraportada (fija) a donde esté la portada.
     // Si la portada se levanta, su lado de la sombra se encoge hacia el lomo y se difumina.
@@ -578,7 +652,8 @@ export function Book({ page, offsetX, reducedMotion, drag }: BookProps) {
       </mesh>
       {/* Contraportada (base fija a la derecha) */}
       <mesh position={[COVER_W / 2, 0, 0]}>
-        <planeGeometry args={[COVER_W, COVER_H]} />
+        {/* Con malla, para que ondule con el papel que tiene encima */}
+        <planeGeometry args={[COVER_W, COVER_H, COLS, ROWS]} />
         <meshBasicMaterial map={textures.board} onBeforeCompile={boardShadow} />
       </mesh>
       {LEAVES.map((spec, i) => (
